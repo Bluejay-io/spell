@@ -8,19 +8,23 @@
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<key>CFBundleDisplayName</key>
+	<string>Spell</string>
+	<key>CFBundleName</key>
+	<string>Spell</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.7.6</string>
 	<key>CFBundleVersion</key>
 	<string>86</string>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>Hex needs accessibility access to monitor keyboard events for hotkey detection.</string>
+	<string>Spell needs accessibility access to monitor keyboard events for hotkey detection.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>NSInputMonitoringUsageDescription</key>
-	<string>Hex needs Input Monitoring permission so your global hotkey works in every app.</string>
+	<string>Spell needs Input Monitoring permission so your global hotkey works in every app.</string>
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
 	<key>SUFeedURL</key>

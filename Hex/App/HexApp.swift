@@ -24,7 +24,7 @@ struct HexApp: App {
 			
 			Divider()
 			
-			Button("Quit Hex") {
+			Button("Quit Spell") {
 				NSApplication.shared.terminate(nil)
 			}.keyboardShortcut("q")
 		} label: {

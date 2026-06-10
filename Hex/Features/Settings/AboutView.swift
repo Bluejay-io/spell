@@ -35,7 +35,7 @@ struct AboutView: View {
                     }
                 }
                 HStack {
-                    Label("Hex is open source", systemImage: "apple.terminal.on.rectangle")
+                    Label("Spell is open source", systemImage: "apple.terminal.on.rectangle")
                     Spacer()
                     Link("Visit our GitHub", destination: URL(string: "https://github.com/kitlangton/Hex/")!)
                 }
