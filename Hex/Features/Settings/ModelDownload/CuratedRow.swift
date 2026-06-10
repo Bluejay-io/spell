@@ -23,9 +23,7 @@ struct CuratedRow: View {
 	var body: some View {
 		Button(action: { store.send(.selectModel(model.internalName)) }) {
 			HStack(alignment: .center, spacing: 12) {
-				// Radio selector
-				Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-					.foregroundStyle(isSelected ? .blue : .secondary)
+				leadingIcon
 
 				// Title and ratings
 				VStack(alignment: .leading, spacing: 6) {
@@ -126,5 +124,28 @@ struct CuratedRow: View {
 			}
 		}
 		.enableInjection()
+	}
+
+	@ViewBuilder
+	private var leadingIcon: some View {
+		if model.isHostedOpenAI {
+			Image("OpenAILogo")
+				.resizable()
+				.renderingMode(.template)
+				.scaledToFit()
+				.foregroundStyle(Color.primary)
+				.frame(width: 18, height: 18)
+				.accessibilityLabel("OpenAI")
+		} else if model.isParakeet {
+			Image("NVIDIALogo")
+				.resizable()
+				.scaledToFit()
+				.frame(width: 24, height: 18)
+				.accessibilityLabel("NVIDIA")
+		} else {
+			Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+				.foregroundStyle(isSelected ? .blue : .secondary)
+				.frame(width: 18, height: 18)
+		}
 	}
 }

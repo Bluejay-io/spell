@@ -16,9 +16,9 @@ enum OpenAITranscriptionModel: String, CaseIterable, Sendable {
 	var displayName: String {
 		switch self {
 		case .fast:
-			return "OpenAI Fast"
+			return "GPT-4o Mini Transcribe"
 		case .accurate:
-			return "OpenAI Accurate"
+			return "GPT-4o Transcribe"
 		}
 	}
 

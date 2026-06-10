@@ -14,6 +14,7 @@ import SwiftUI
 @Reducer
 struct AppFeature {
   enum ActiveTab: Equatable {
+    case models
     case settings
     case remappings
     case history
@@ -89,12 +90,12 @@ struct AppFeature {
           return .none
         }
         return .run { _ in
-          await pasteboard.paste(lastTranscript)
+          _ = await pasteboard.paste(lastTranscript)
         }
         
       case .transcription(.modelMissing):
-        HexLog.app.notice("Model missing - activating app and switching to settings")
-        state.activeTab = .settings
+        HexLog.app.notice("Model missing - activating app and switching to models")
+        state.activeTab = .models
         state.settings.shouldFlashModelSection = true
         return .run { send in
           await MainActor.run {
@@ -260,6 +261,14 @@ struct AppView: View {
     NavigationSplitView(columnVisibility: $columnVisibility) {
       List(selection: $store.activeTab) {
         Button {
+          store.send(.setActiveTab(.models))
+        } label: {
+          Label("Models", systemImage: "waveform.badge.magnifyingglass")
+        }
+        .buttonStyle(.plain)
+        .tag(AppFeature.ActiveTab.models)
+
+        Button {
           store.send(.setActiveTab(.settings))
         } label: {
           Label("Settings", systemImage: "gearshape")
@@ -293,6 +302,9 @@ struct AppView: View {
       }
     } detail: {
       switch store.state.activeTab {
+      case .models:
+        ModelsView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("Models")
       case .settings:
         SettingsView(
           store: store.scope(state: \.settings, action: \.settings),

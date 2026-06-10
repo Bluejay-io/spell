@@ -15,9 +15,14 @@ import SwiftUI
 
 private let pasteboardLogger = HexLog.pasteboard
 
+enum PasteResult: Equatable, Sendable {
+    case pasted
+    case copiedToClipboardFallback
+}
+
 @DependencyClient
 struct PasteboardClient {
-    var paste: @Sendable (String) async -> Void
+    var paste: @Sendable (String) async -> PasteResult = { _ in .copiedToClipboardFallback }
     var copy: @Sendable (String) async -> Void
     var sendKeyboardCommand: @Sendable (KeyboardCommand) async -> Void
 }
@@ -81,11 +86,11 @@ struct PasteboardClientLive {
     }
 
     @MainActor
-    func paste(text: String) async {
+    func paste(text: String) async -> PasteResult {
         if hexSettings.useClipboardPaste {
-            await pasteWithClipboard(text)
+            return await pasteWithClipboard(text)
         } else {
-            simulateTypingWithAppleScript(text)
+            return typeDirectly(text) ? .pasted : .copiedToClipboardFallback
         }
     }
     
@@ -152,61 +157,15 @@ struct PasteboardClientLive {
         pasteboardLogger.debug("Sent keyboard command: \(command.displayName)")
     }
 
-    /// Pastes current clipboard content to the frontmost application
-    static func pasteToFrontmostApp() -> Bool {
-        let script = """
-        if application "System Events" is not running then
-            tell application "System Events" to launch
-            delay 0.1
-        end if
-        tell application "System Events"
-            tell process (name of first application process whose frontmost is true)
-                tell (menu item "Paste" of menu of menu item "Paste" of menu "Edit" of menu bar item "Edit" of menu bar 1)
-                    if exists then
-                        log (get properties of it)
-                        if enabled then
-                            click it
-                            return true
-                        else
-                            return false
-                        end if
-                    end if
-                end tell
-                tell (menu item "Paste" of menu "Edit" of menu bar item "Edit" of menu bar 1)
-                    if exists then
-                        if enabled then
-                            click it
-                            return true
-                        else
-                            return false
-                        end if
-                    else
-                        return false
-                    end if
-                end tell
-            end tell
-        end tell
-        """
-        
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: script) {
-            let result = scriptObject.executeAndReturnError(&error)
-            if let error = error {
-                pasteboardLogger.error("AppleScript paste failed: \(error)")
-                return false
-            }
-            return result.booleanValue
-        }
-        return false
-    }
-
     @MainActor
-    func pasteWithClipboard(_ text: String) async {
+    func pasteWithClipboard(_ text: String) async -> PasteResult {
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
         let targetChangeCount = writeAndTrackChangeCount(pasteboard: pasteboard, text: text)
         _ = await waitForPasteboardCommit(targetChangeCount: targetChangeCount)
-        let pasteSucceeded = await performPaste(text)
+
+        let textTargetStatus = Self.focusedTextTargetStatus()
+        let pasteSucceeded = await performPaste(text, textTargetStatus: textTargetStatus)
         
         // Only restore original pasteboard contents if:
         // 1. Copying to clipboard is disabled AND
@@ -231,6 +190,8 @@ struct PasteboardClientLive {
             // TODO: Could add a notification here to inform user
             // that text is available in clipboard
         }
+
+        return pasteSucceeded ? .pasted : .copiedToClipboardFallback
     }
 
     @MainActor
@@ -268,15 +229,14 @@ struct PasteboardClientLive {
     // MARK: - Paste Orchestration
 
     @MainActor
-    private enum PasteStrategy: CaseIterable {
-        case cmdV
-        case menuItem
+    private enum PasteStrategy {
         case accessibility
+        case cmdV
     }
 
     @MainActor
-    private func performPaste(_ text: String) async -> Bool {
-        for strategy in PasteStrategy.allCases {
+    private func performPaste(_ text: String, textTargetStatus: FocusedTextTargetStatus) async -> Bool {
+        for strategy in strategies(for: textTargetStatus) {
             if await attemptPaste(text, using: strategy) {
                 return true
             }
@@ -284,13 +244,20 @@ struct PasteboardClientLive {
         return false
     }
 
+    private func strategies(for textTargetStatus: FocusedTextTargetStatus) -> [PasteStrategy] {
+        switch textTargetStatus {
+        case .available:
+            return [.accessibility, .cmdV]
+        case .unknown, .unavailable:
+            return [.cmdV]
+        }
+    }
+
     @MainActor
     private func attemptPaste(_ text: String, using strategy: PasteStrategy) async -> Bool {
         switch strategy {
         case .cmdV:
             return await postCmdV(delayMs: 0)
-        case .menuItem:
-            return PasteboardClientLive.pasteToFrontmostApp()
         case .accessibility:
             return (try? Self.insertTextAtCursor(text)) != nil
         }
@@ -330,13 +297,19 @@ struct PasteboardClientLive {
         try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
     }
     
-    func simulateTypingWithAppleScript(_ text: String) {
-        let escapedText = text.replacingOccurrences(of: "\"", with: "\\\"")
-        let script = NSAppleScript(source: "tell application \"System Events\" to keystroke \"\(escapedText)\"")
-        var error: NSDictionary?
-        script?.executeAndReturnError(&error)
-        if let error = error {
-            pasteboardLogger.error("Error executing AppleScript typing fallback: \(error)")
+    func typeDirectly(_ text: String) -> Bool {
+        let textTargetStatus = Self.focusedTextTargetStatus()
+        guard textTargetStatus != .unavailable else {
+            pasteboardLogger.notice("Typing skipped because no focused text input was detected.")
+            return false
+        }
+
+        do {
+            try Self.insertTextAtCursor(text)
+            return true
+        } catch {
+            pasteboardLogger.notice("Direct typing failed; text remains in clipboard fallback. \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -377,4 +350,92 @@ struct PasteboardClientLive {
             throw PasteError.failedToInsertText
         }
     }
+
+    private enum FocusedTextTargetStatus {
+        case available
+        case unavailable
+        case unknown
+    }
+
+    private static func focusedTextTargetStatus() -> FocusedTextTargetStatus {
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        guard AXIsProcessTrustedWithOptions([promptKey: false] as CFDictionary) else {
+            pasteboardLogger.notice("Focused text target status unknown because Accessibility permission is not granted.")
+            return .unknown
+        }
+
+        let systemWideElement = AXUIElementCreateSystemWide()
+
+        var focusedElementRef: CFTypeRef?
+        let axError = AXUIElementCopyAttributeValue(
+            systemWideElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElementRef
+        )
+
+        guard axError == .success, let focusedElementRef else {
+            pasteboardLogger.debug("Focused text target unavailable: AX focused element lookup failed with \(String(describing: axError), privacy: .public)")
+            return .unavailable
+        }
+
+        let focusedElement = focusedElementRef as! AXUIElement
+
+        var role: String?
+        var roleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(focusedElement, kAXRoleAttribute as CFString, &roleRef) == .success,
+           let roleValue = roleRef as? String {
+            role = roleValue
+            if textInputRoles.contains(roleValue) {
+                return .available
+            }
+        }
+
+        var subrole: String?
+        var subroleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(focusedElement, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+           let subroleValue = subroleRef as? String {
+            subrole = subroleValue
+            if textInputSubroles.contains(subroleValue) {
+                return .available
+            }
+        }
+
+        var isSettable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(
+            focusedElement,
+            kAXSelectedTextAttribute as CFString,
+            &isSettable
+        ) == .success, isSettable.boolValue {
+            return .available
+        }
+
+        isSettable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(
+            focusedElement,
+            kAXValueAttribute as CFString,
+            &isSettable
+        ) == .success, isSettable.boolValue {
+            return .available
+        }
+
+        guard let role else {
+            pasteboardLogger.debug("Focused text target unavailable: focused element has no AX role")
+            return .unavailable
+        }
+
+        pasteboardLogger.debug(
+            "Focused element does not look editable role=\(role, privacy: .public) subrole=\(subrole ?? "nil", privacy: .public)"
+        )
+        return .unavailable
+    }
+
+    private static let textInputRoles: Set<String> = [
+        kAXTextFieldRole as String,
+        kAXTextAreaRole as String,
+        kAXComboBoxRole as String
+    ]
+
+    private static let textInputSubroles: Set<String> = [
+        "AXSearchField"
+    ]
 }

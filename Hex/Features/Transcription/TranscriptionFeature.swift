@@ -25,6 +25,7 @@ struct TranscriptionFeature {
     var error: String?
     var recordingStartTime: Date?
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
+    var pasteFallbackMessage: String?
     var sourceAppBundleID: String?
     var sourceAppName: String?
     @Shared(.hexSettings) var hexSettings: HexSettings
@@ -52,6 +53,8 @@ struct TranscriptionFeature {
     // Transcription result flow
     case transcriptionResult(String, URL, TimeInterval)
     case transcriptionError(Error, URL?)
+    case pasteFallbackMessageShown
+    case pasteFallbackMessageExpired
 
     // Model availability
     case modelMissing
@@ -122,6 +125,17 @@ struct TranscriptionFeature {
 
       case let .transcriptionError(error, audioURL):
         return handleTranscriptionError(&state, error: error, audioURL: audioURL)
+
+      case .pasteFallbackMessageShown:
+        state.pasteFallbackMessage = "Click on a textbox first and then dictate"
+        return .run { send in
+          try? await Task.sleep(for: .seconds(2.4))
+          await send(.pasteFallbackMessageExpired)
+        }
+
+      case .pasteFallbackMessageExpired:
+        state.pasteFallbackMessage = nil
+        return .none
 
       case .modelMissing:
         return .none
@@ -420,6 +434,7 @@ private extension TranscriptionFeature {
   ) -> Effect<Action> {
     state.isTranscribing = false
     state.isPrewarming = false
+    state.pasteFallbackMessage = nil
 
     // Check for force quit command (emergency escape hatch)
     if ForceQuitCommandDetector.matches(result) {
@@ -476,7 +491,7 @@ private extension TranscriptionFeature {
 
     return .run { send in
       do {
-        try await finalizeRecordingAndStoreTranscript(
+        let pasteResult = try await finalizeRecordingAndStoreTranscript(
           result: modifiedResult,
           duration: duration,
           sourceAppBundleID: sourceAppBundleID,
@@ -484,6 +499,9 @@ private extension TranscriptionFeature {
           audioURL: audioURL,
           transcriptionHistory: transcriptionHistory
         )
+        if pasteResult == .copiedToClipboardFallback {
+          await send(.pasteFallbackMessageShown)
+        }
       } catch {
         await send(.transcriptionError(error, audioURL))
       }
@@ -515,7 +533,7 @@ private extension TranscriptionFeature {
     sourceAppName: String?,
     audioURL: URL,
     transcriptionHistory: Shared<TranscriptionHistory>
-  ) async throws {
+  ) async throws -> PasteResult {
     @Shared(.hexSettings) var hexSettings: HexSettings
 
     if hexSettings.saveTranscriptionHistory {
@@ -544,8 +562,14 @@ private extension TranscriptionFeature {
       FileManager.default.removeItemIfExists(at: audioURL)
     }
 
-    await pasteboard.paste(result)
-    soundEffect.play(.pasteTranscript)
+    let pasteResult = await pasteboard.paste(result)
+    switch pasteResult {
+    case .pasted:
+      soundEffect.play(.pasteTranscript)
+    case .copiedToClipboardFallback:
+      soundEffect.play(.cancel)
+    }
+    return pasteResult
   }
 }
 
@@ -557,6 +581,7 @@ private extension TranscriptionFeature {
     state.isTranscribing = false
     state.isRecording = false
     state.isPrewarming = false
+    state.pasteFallbackMessage = nil
 
     return .merge(
       .cancel(id: CancelID.transcription),
@@ -581,6 +606,7 @@ private extension TranscriptionFeature {
   func handleDiscard(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
     state.isPrewarming = false
+    state.pasteFallbackMessage = nil
 
     // Silently discard - no sound effect
     return .merge(
@@ -604,7 +630,9 @@ struct TranscriptionView: View {
   @ObserveInjection var inject
 
   var status: TranscriptionIndicatorView.Status {
-    if store.isTranscribing {
+    if let message = store.pasteFallbackMessage {
+      return .message(message)
+    } else if store.isTranscribing {
       return .transcribing
     } else if store.isRecording {
       return .recording

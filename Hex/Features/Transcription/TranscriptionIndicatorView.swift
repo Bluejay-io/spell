@@ -10,12 +10,13 @@ import SwiftUI
 struct TranscriptionIndicatorView: View {
   @ObserveInjection var inject
 
-  enum Status {
+  enum Status: Equatable {
     case hidden
     case optionKeyPressed
     case recording
     case transcribing
     case prewarming
+    case message(String)
   }
 
   var status: Status
@@ -34,6 +35,23 @@ struct TranscriptionIndicatorView: View {
   var body: some View {
     let averagePower = normalizedAveragePower
 
+    if case let .message(message) = status {
+      Text(message)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(.white)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 18)
+        .frame(height: 32)
+        .background {
+          Capsule()
+            .fill(Color.black)
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 7)
+        }
+        .transition(.scale(scale: 0.96).combined(with: .opacity))
+        .animation(.bouncy(duration: 0.28), value: status)
+        .enableInjection()
+    } else {
     TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
       let phase = processingPhase(at: timeline.date)
 
@@ -42,13 +60,6 @@ struct TranscriptionIndicatorView: View {
         .overlay {
           Capsule()
             .strokeBorder(border, lineWidth: 1)
-        }
-        .overlay(alignment: .top) {
-          Capsule()
-            .fill(Color.white.opacity(0.16))
-            .frame(height: 1)
-            .padding(.horizontal, 12)
-            .padding(.top, 1)
         }
         .overlay {
           HStack(spacing: 3) {
@@ -79,6 +90,7 @@ struct TranscriptionIndicatorView: View {
     .animation(.bouncy(duration: 0.28), value: status)
     .animation(.interactiveSpring(response: 0.18, dampingFraction: 0.72), value: meter)
     .enableInjection()
+    }
   }
 
   private var normalizedAveragePower: Double {
@@ -106,7 +118,7 @@ struct TranscriptionIndicatorView: View {
       return Color.white.opacity(0.20 + normalizedAveragePower * 0.12)
     case .transcribing, .prewarming:
       return Color.white.opacity(0.24)
-    case .hidden:
+    case .hidden, .message(_):
       return Color.clear
     case .optionKeyPressed:
       return Color.white.opacity(0.18)
@@ -115,7 +127,7 @@ struct TranscriptionIndicatorView: View {
 
   private func width(for status: Status) -> CGFloat {
     switch status {
-    case .hidden, .optionKeyPressed:
+    case .hidden, .optionKeyPressed, .message(_):
       return armedWidth
     case .recording, .transcribing, .prewarming:
       return activeWidth
@@ -131,7 +143,7 @@ struct TranscriptionIndicatorView: View {
     let baseHeight = baseHeights[index % baseHeights.count]
 
     switch status {
-    case .hidden:
+    case .hidden, .message(_):
       return 0
     case .optionKeyPressed:
       return max(3, baseHeight * 0.45)
@@ -148,7 +160,7 @@ struct TranscriptionIndicatorView: View {
 
   private func barColor(for index: Int, phase: Double) -> Color {
     switch status {
-    case .hidden:
+    case .hidden, .message(_):
       return Color.clear
     case .optionKeyPressed:
       return Color.white.opacity(0.58)
@@ -167,7 +179,7 @@ struct TranscriptionIndicatorView: View {
     case .transcribing, .prewarming:
       let highlight = (sin(Double(index) * 0.95 - phase) + 1) / 2
       return highlight * 0.12
-    case .hidden, .optionKeyPressed:
+    case .hidden, .optionKeyPressed, .message(_):
       return 0
     }
   }
@@ -180,6 +192,7 @@ struct TranscriptionIndicatorView: View {
     TranscriptionIndicatorView(status: .recording, meter: .init(averagePower: 0.5, peakPower: 0.5))
     TranscriptionIndicatorView(status: .transcribing, meter: .init(averagePower: 0, peakPower: 0))
     TranscriptionIndicatorView(status: .prewarming, meter: .init(averagePower: 0, peakPower: 0))
+    TranscriptionIndicatorView(status: .message("Click on a textbox first and then dictate"), meter: .init(averagePower: 0, peakPower: 0))
   }
   .padding(40)
 }

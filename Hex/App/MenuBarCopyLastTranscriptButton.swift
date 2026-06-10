@@ -15,7 +15,7 @@ struct MenuBarCopyLastTranscriptButton: View {
 
     let button = Button("Paste Last Transcript") {
       if let text = lastText {
-        Task { await pasteboard.paste(text) }
+        Task { _ = await pasteboard.paste(text) }
       }
     }
     .disabled(lastText == nil)
