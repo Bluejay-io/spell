@@ -376,6 +376,14 @@ private extension TranscriptionFeature {
           let capturedURL = await recording.stopRecording()
           audioURL = capturedURL
           guard !Task.isCancelled else { return }
+          guard !capturedURL.lastPathComponent.hasPrefix("hex-ignored-stop-"),
+                FileManager.default.fileExists(atPath: capturedURL.path) else {
+            throw NSError(
+              domain: "TranscriptionFeature",
+              code: -2,
+              userInfo: [NSLocalizedDescriptionKey: "Recording did not produce an audio file."]
+            )
+          }
           soundEffect.play(.stopRecording)
 
           // Create transcription options with the selected language

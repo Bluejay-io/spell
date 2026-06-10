@@ -73,6 +73,7 @@ actor TranscriptionClientLive {
   /// The name of the currently loaded model, if any.
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
+  @Dependency(\.openAITranscription) private var openAITranscription
 
   /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
   private lazy var modelsBaseFolder: URL = {
@@ -88,6 +89,13 @@ actor TranscriptionClientLive {
   /// Ensures the given `variant` model is downloaded and loaded, reporting
   /// overall progress (0%–50% for downloading, 50%–100% for loading).
   func downloadAndLoadModel(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
+    if OpenAITranscriptionModel(rawValue: variant) != nil {
+      let progress = Progress(totalUnitCount: 100)
+      progress.completedUnitCount = 100
+      progressCallback(progress)
+      currentModelName = variant
+      return
+    }
     // If Parakeet, use Parakeet client path
     if isParakeet(variant) {
       try await parakeet.ensureLoaded(modelName: variant, progress: progressCallback)
@@ -140,6 +148,9 @@ actor TranscriptionClientLive {
 
   /// Deletes a model from disk if it exists
   func deleteModel(variant: String) async throws {
+    if OpenAITranscriptionModel(rawValue: variant) != nil {
+      return
+    }
     if isParakeet(variant) {
       try await parakeet.deleteCaches(modelName: variant)
       if currentModelName == variant { unloadCurrentModel() }
@@ -167,6 +178,10 @@ actor TranscriptionClientLive {
   /// Returns `true` if the model is already downloaded to the local folder.
   /// Performs a thorough check to ensure the model files are actually present and usable.
   func isModelDownloaded(_ modelName: String) async -> Bool {
+    if OpenAITranscriptionModel(rawValue: modelName) != nil {
+      @Dependency(\.openAIKeychain) var keychain
+      return keychain.hasAPIKey()
+    }
     if isParakeet(modelName) {
       let available = await parakeet.isModelAvailable(modelName)
       parakeetLogger.debug("Parakeet available? \(available)")
@@ -210,6 +225,9 @@ actor TranscriptionClientLive {
   /// Lists all model variants available in the `argmaxinc/whisperkit-coreml` repository.
   func getAvailableModels() async throws -> [String] {
     var names = try await WhisperKit.fetchAvailableModels()
+    for model in OpenAITranscriptionModel.allCases.reversed() {
+      if !names.contains(model.rawValue) { names.insert(model.rawValue, at: 0) }
+    }
     #if canImport(FluidAudio)
     for model in ParakeetModel.allCases.reversed() {
       if !names.contains(model.identifier) { names.insert(model.identifier, at: 0) }
@@ -228,6 +246,13 @@ actor TranscriptionClientLive {
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
     let startAll = Date()
+    if let openAIModel = OpenAITranscriptionModel(rawValue: model) {
+      transcriptionLogger.notice("Transcribing with hosted OpenAI model=\(openAIModel.apiModel, privacy: .public) file=\(url.lastPathComponent, privacy: .private)")
+      let text = try await openAITranscription.transcribe(url, openAIModel, options)
+      transcriptionLogger.info("OpenAI request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
+      currentModelName = model
+      return text
+    }
     if isParakeet(model) {
       transcriptionLogger.notice("Transcribing with Parakeet model=\(model) file=\(url.lastPathComponent)")
       let startLoad = Date()

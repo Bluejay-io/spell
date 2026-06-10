@@ -95,6 +95,7 @@ final class SuperFastCaptureController {
     let requestedAt: Date
     let prependedDuration: TimeInterval
     var didLogFirstBuffer: Bool
+    var writtenFrameCount: Int
   }
 
   private let logger = HexLog.recording
@@ -288,7 +289,8 @@ final class SuperFastCaptureController {
           file: file,
           requestedAt: requestedAt,
           prependedDuration: prependedDuration,
-          didLogFirstBuffer: false
+          didLogFirstBuffer: false,
+          writtenFrameCount: preRollSamples.count
         )
       } catch {
         startError = error
@@ -302,12 +304,18 @@ final class SuperFastCaptureController {
 
   func finishRecording(clearBuffer: Bool = true) -> URL? {
     processingQueue.sync {
-      let url = activeRecording?.url
+      let recording = activeRecording
       activeRecording = nil
       if clearBuffer {
         ringBuffer.clear()
       }
-      return url
+      guard let recording else { return nil }
+      guard recording.writtenFrameCount > 0 else {
+        logger.error("Capture engine produced no audio frames; discarding empty recording")
+        FileManager.default.removeItemIfExists(at: recording.url)
+        return nil
+      }
+      return recording.url
     }
   }
 
@@ -361,6 +369,8 @@ final class SuperFastCaptureController {
 
     do {
       try recording.file.write(from: converted)
+      recording.writtenFrameCount += sampleCount
+      activeRecording = recording
     } catch {
       logger.error("Failed to write capture engine audio: \(error.localizedDescription)")
       activeRecording = nil

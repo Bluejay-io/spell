@@ -58,6 +58,9 @@ struct SettingsFeature {
     // Model Management
     var modelDownload = ModelDownloadFeature.State()
     var shouldFlashModelSection = false
+    var openAIAPIKeyInput = ""
+    var hasOpenAIAPIKey = false
+    var openAIAPIKeyMessage: String?
 
   }
 
@@ -96,6 +99,13 @@ struct SettingsFeature {
 
     // Model Management
     case modelDownload(ModelDownloadFeature.Action)
+    case loadOpenAIAPIKeyState
+    case openAIAPIKeyLoaded(String?)
+    case setOpenAIAPIKeyInput(String)
+    case saveOpenAIAPIKey
+    case deleteOpenAIAPIKey
+    case openOpenAIAPIKeysConsole
+    case openAIAPIKeyOperationCompleted(Result<Bool, Error>)
     
     // History Management
     case toggleSaveTranscriptionHistory(Bool)
@@ -120,6 +130,7 @@ struct SettingsFeature {
   @Dependency(\.recording) var recording
   @Dependency(\.soundEffects) var soundEffects
   @Dependency(\.transcriptPersistence) var transcriptPersistence
+  @Dependency(\.openAIKeychain) var openAIKeychain
 
   private func deleteAudioEffect(for transcripts: [Transcript]) -> Effect<Action> {
     .run { [transcriptPersistence] _ in
@@ -255,6 +266,7 @@ struct SettingsFeature {
           }
 
           await send(.modelDownload(.fetchModels))
+          await send(.loadOpenAIAPIKeyState)
           await send(.loadAvailableInputDevices)
 
           // Listen for device connection/disconnection notifications
@@ -512,6 +524,67 @@ struct SettingsFeature {
       // Model Management
       case .modelDownload:
         return .none
+
+      case .loadOpenAIAPIKeyState:
+        return .run { send in
+          let key = try? openAIKeychain.loadAPIKey()
+          await send(.openAIAPIKeyLoaded(key))
+        }
+
+      case let .openAIAPIKeyLoaded(key):
+        state.hasOpenAIAPIKey = key?.isEmpty == false
+        state.openAIAPIKeyInput = ""
+        state.openAIAPIKeyMessage = state.hasOpenAIAPIKey ? "OpenAI API key saved." : nil
+        return .send(.modelDownload(.openAIKeyAvailabilityChanged(state.hasOpenAIAPIKey)))
+
+      case let .setOpenAIAPIKeyInput(value):
+        state.openAIAPIKeyInput = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        state.openAIAPIKeyMessage = nil
+        return .none
+
+      case .saveOpenAIAPIKey:
+        let key = state.openAIAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+          state.openAIAPIKeyMessage = "Paste an OpenAI API key first."
+          return .none
+        }
+        return .run { send in
+          do {
+            try openAIKeychain.saveAPIKey(key)
+            await send(.openAIAPIKeyOperationCompleted(.success(true)))
+          } catch {
+            await send(.openAIAPIKeyOperationCompleted(.failure(error)))
+          }
+        }
+
+      case .deleteOpenAIAPIKey:
+        return .run { send in
+          do {
+            try openAIKeychain.deleteAPIKey()
+            await send(.openAIAPIKeyOperationCompleted(.success(false)))
+          } catch {
+            await send(.openAIAPIKeyOperationCompleted(.failure(error)))
+          }
+        }
+
+      case .openOpenAIAPIKeysConsole:
+        return .run { _ in
+          await MainActor.run {
+            _ = NSWorkspace.shared.open(URL(string: "https://platform.openai.com/api-keys")!)
+          }
+        }
+
+      case let .openAIAPIKeyOperationCompleted(result):
+        switch result {
+        case let .success(hasKey):
+          state.hasOpenAIAPIKey = hasKey
+          state.openAIAPIKeyInput = ""
+          state.openAIAPIKeyMessage = hasKey ? "OpenAI API key saved." : "OpenAI API key removed."
+          return .send(.modelDownload(.openAIKeyAvailabilityChanged(hasKey)))
+        case let .failure(error):
+          state.openAIAPIKeyMessage = error.localizedDescription
+          return .none
+        }
       
       // Microphone device selection
       case .loadAvailableInputDevices:

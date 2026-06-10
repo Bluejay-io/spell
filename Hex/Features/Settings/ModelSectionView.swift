@@ -13,6 +13,7 @@ struct ModelSectionView: View {
 				store: store.scope(state: \.modelDownload, action: \.modelDownload),
 				shouldFlash: shouldFlash
 			)
+			OpenAIAPIKeyView(store: store)
 		}
 		.enableInjection()
 	}

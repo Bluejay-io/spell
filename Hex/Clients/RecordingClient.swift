@@ -761,6 +761,11 @@ actor RecordingClientLive {
     }
 
     recordingLogger.notice("Selected device \(selectedMicrophoneID) missing; using system default")
+    $hexSettings.withLock { settings in
+      if settings.selectedMicrophoneID == selectedMicrophoneID {
+        settings.selectedMicrophoneID = nil
+      }
+    }
     return nil
   }
 

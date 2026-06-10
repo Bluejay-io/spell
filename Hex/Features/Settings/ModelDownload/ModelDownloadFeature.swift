@@ -37,6 +37,9 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 	public var id: String { internalName }
 
 	public var badge: String? {
+		if isHostedOpenAI {
+			return "HOSTED"
+		}
 		switch parakeetModel {
 		case .englishV2:
 			return "BEST FOR ENGLISH"
@@ -53,6 +56,14 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 
 	var isParakeet: Bool {
 		parakeetModel != nil
+	}
+
+	var openAIModel: OpenAITranscriptionModel? {
+		OpenAITranscriptionModel(rawValue: internalName)
+	}
+
+	var isHostedOpenAI: Bool {
+		openAIModel != nil
 	}
 
 	public init(
@@ -101,7 +112,17 @@ private enum CuratedModelLoader {
 	}()
 
 	static func load() -> [CuratedModelInfo] {
-		bundledModels
+		bundledModels + OpenAITranscriptionModel.allCases.map { model in
+			CuratedModelInfo(
+				displayName: model.displayName,
+				internalName: model.rawValue,
+				size: model.description,
+				accuracyStars: model.accuracyStars,
+				speedStars: model.speedStars,
+				storageSize: "BYOK",
+				isDownloaded: false
+			)
+		}
 	}
 }
 
@@ -131,6 +152,7 @@ public struct ModelDownloadFeature {
 		public var downloadProgress: Double = 0
 		public var downloadError: String?
 		public var downloadingModelName: String?
+		public var hasOpenAIAPIKey = false
 
 		// Track which model generated a progress update to handle switching models
 		public var activeDownloadID: UUID?
@@ -160,6 +182,7 @@ public struct ModelDownloadFeature {
 		case downloadProgress(Double)
 		case downloadCompleted(Result<String, Error>)
 		case cancelDownload
+		case openAIKeyAvailabilityChanged(Bool)
 
 		case deleteSelectedModel
 		case openModelLocation
@@ -168,6 +191,7 @@ public struct ModelDownloadFeature {
 	// MARK: Dependencies
 
 	@Dependency(\.transcription) var transcription
+	@Dependency(\.openAIKeychain) var openAIKeychain
 
 	public init() {}
 
@@ -228,6 +252,15 @@ public struct ModelDownloadFeature {
 			updateBootstrapState(&state)
 			return .none
 
+		case let .openAIKeyAvailabilityChanged(hasKey):
+			state.hasOpenAIAPIKey = hasKey
+			for model in OpenAITranscriptionModel.allCases {
+				state.availableModels[id: model.rawValue]?.isDownloaded = hasKey
+				state.curatedModels[id: model.rawValue]?.isDownloaded = hasKey
+			}
+			updateBootstrapState(&state)
+			return .none
+
 		// MARK: – Fetch Models
 
 		case .fetchModels:
@@ -235,6 +268,7 @@ public struct ModelDownloadFeature {
 			state.isLoadingModels = true
 			return .run { send in
 				do {
+					let hasOpenAIAPIKey = openAIKeychain.hasAPIKey()
 					async let recommendedSupportTask = transcription.getRecommendedModels()
 					async let availableNamesTask = transcription.getAvailableModels()
 					let recommendedSupport = try await recommendedSupportTask
@@ -251,6 +285,7 @@ public struct ModelDownloadFeature {
 						}
 						return try await group.reduce(into: []) { $0.append($1) }
 					}
+					await send(.openAIKeyAvailabilityChanged(hasOpenAIAPIKey))
 					await send(.modelsLoaded(recommended: recommended, available: infos))
 				} catch {
 					await send(.modelsLoaded(recommended: "", available: []))
@@ -261,6 +296,12 @@ public struct ModelDownloadFeature {
 			state.isLoadingModels = false
 			// Ensure our curated Parakeet options are visible even if WhisperKit doesn't list them
 			var availablePlus = available
+			for model in OpenAITranscriptionModel.allCases.reversed() {
+				let isReady = state.hasOpenAIAPIKey
+				if !availablePlus.contains(where: { $0.name == model.rawValue }) {
+					availablePlus.insert(ModelInfo(name: model.rawValue, isDownloaded: isReady), at: 0)
+				}
+			}
 			for model in ParakeetModel.allCases.reversed() {
 				if !availablePlus.contains(where: { $0.name == model.identifier }) {
 					availablePlus.insert(ModelInfo(name: model.identifier, isDownloaded: false), at: 0)
@@ -306,6 +347,19 @@ public struct ModelDownloadFeature {
 
 		case .downloadSelectedModel:
 			guard !state.hexSettings.selectedModel.isEmpty else { return .none }
+			if OpenAITranscriptionModel(rawValue: state.hexSettings.selectedModel) != nil {
+				if state.hasOpenAIAPIKey {
+					updateBootstrapState(&state)
+				} else {
+					state.downloadError = "Add an OpenAI API key to use hosted transcription."
+					state.$modelBootstrapState.withLock {
+						$0.isModelReady = false
+						$0.lastError = state.downloadError
+						$0.progress = 0
+					}
+				}
+				return .none
+			}
 			state.downloadError = nil
 			state.isDownloading = true
 			let selected = state.hexSettings.selectedModel
@@ -398,6 +452,9 @@ public struct ModelDownloadFeature {
 
 		case .deleteSelectedModel:
 			guard !state.selectedModel.isEmpty else { return .none }
+			if OpenAITranscriptionModel(rawValue: state.selectedModel) != nil {
+				return .none
+			}
 			state.$modelBootstrapState.withLock { $0.isModelReady = false }
 			return .run { [state] send in
 				do {
@@ -420,6 +477,9 @@ public struct ModelDownloadFeature {
 		// models folder. Route "Show in Finder" to the matching root so users
 		// don't end up staring at an empty WhisperKit folder thinking the
 		// Parakeet download silently failed.
+		guard OpenAITranscriptionModel(rawValue: state.selectedModel) == nil else {
+			return .none
+		}
 		let usesParakeetRoot = ParakeetModel(rawValue: state.selectedModel) != nil
 		return .run { _ in
 			let base = try usesParakeetRoot

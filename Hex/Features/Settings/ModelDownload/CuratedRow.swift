@@ -66,7 +66,12 @@ struct CuratedRow: View {
 
 					// Download/Progress/Downloaded at far right
 					ZStack {
-						if store.isDownloading, store.downloadingModelName == model.internalName {
+						if model.isHostedOpenAI {
+							Image(systemName: model.isDownloaded ? "checkmark.circle.fill" : "key")
+								.foregroundStyle(model.isDownloaded ? .green : .secondary)
+								.frame(width: 24, height: 24)
+								.help(model.isDownloaded ? "API key saved" : "Add an OpenAI API key below")
+						} else if store.isDownloading, store.downloadingModelName == model.internalName {
 							ProgressView(value: store.downloadProgress)
 								.progressViewStyle(.circular)
 								.controlSize(.small)
@@ -106,13 +111,13 @@ struct CuratedRow: View {
 		.buttonStyle(.plain)
 		// Keep context menu as an alternative path
 		.contextMenu {
-			if store.isDownloading, store.downloadingModelName == model.internalName {
+			if !model.isHostedOpenAI, store.isDownloading, store.downloadingModelName == model.internalName {
 				Button("Cancel Download", role: .destructive) { store.send(.cancelDownload) }
 			}
-			if model.isDownloaded || (store.isDownloading && store.downloadingModelName == model.internalName) {
+			if !model.isHostedOpenAI, model.isDownloaded || (store.isDownloading && store.downloadingModelName == model.internalName) {
 				Button("Show in Finder") { store.send(.openModelLocation) }
 			}
-			if model.isDownloaded {
+			if !model.isHostedOpenAI, model.isDownloaded {
 				Divider()
 				Button("Delete", role: .destructive) {
 					store.send(.selectModel(model.internalName))

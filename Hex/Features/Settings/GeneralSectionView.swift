@@ -85,7 +85,7 @@ struct GeneralSectionView: View {
 			Label {
 				HStack(alignment: .center) {
 					Text("Audio Behavior while Recording")
-				Spacer()
+					Spacer()
 					Picker("", selection: Binding(
 						get: { store.hexSettings.recordingAudioBehavior },
 						set: { store.send(.setRecordingAudioBehavior($0)) }
